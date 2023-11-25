@@ -4,8 +4,6 @@
  */
 import fs from "fs-extra";
 import path from "path";
-import { exit } from "process";
-import { execSync } from "child_process";
 import { createRequire } from "module";
 import { getOctokit, context } from "@actions/github";
 
@@ -14,9 +12,6 @@ const require = createRequire(import.meta.url);
 async function resolve() {
   if (!process.env.GITHUB_TOKEN) {
     throw new Error("GITHUB_TOKEN is required");
-  }
-  if (!process.env.GITHUB_REPOSITORY) {
-    throw new Error("GITHUB_REPOSITORY is required");
   }
   if (!process.env.TAURI_PRIVATE_KEY) {
     throw new Error("TAURI_PRIVATE_KEY is required");
@@ -27,15 +22,13 @@ async function resolve() {
 
   const { version } = require("../package.json");
 
-  const buildCmd = `pnpm build -f default-meta`;
-
-  console.log(`[INFO]: Upload to tag "${tag}"`);
-  console.log(`[INFO]: Building app. "${buildCmd}"`);
-
-  execSync(buildCmd);
+  console.log(`[INFO]: Upload to tag dev`);
 
   const cwd = process.cwd();
-  const bundlePath = path.join(cwd, "src-tauri/target/release/bundle");
+  const bundlePath = path.join(
+    cwd,
+    "src-tauri/target/aarch64-apple-darwin/release/bundle"
+  );
   const join = (p) => path.join(bundlePath, p);
 
   const appPathList = [
@@ -62,7 +55,7 @@ async function resolve() {
 
   if (!release.id) throw new Error("failed to find the release");
 
-  await uploadAssets(release.id, [
+  await uploadAssets([
     join(`dmg/Clash Nyanpasu_${version}_aarch64.dmg`),
     ...appPathList,
   ]);
@@ -70,44 +63,25 @@ async function resolve() {
 
 // From tauri-apps/tauri-action
 // https://github.com/tauri-apps/tauri-action/blob/dev/packages/action/src/upload-release-assets.ts
-async function uploadAssets(releaseId, assets) {
+async function uploadAssets(assets) {
   const github = getOctokit(process.env.GITHUB_TOKEN);
-
-  // Determine content-length for header to upload asset
-  const contentLength = (filePath) => fs.statSync(filePath).size;
+  const options = { owner: context.repo.owner, repo: context.repo.repo };
 
   for (const assetPath of assets) {
-    const headers = {
-      "content-type": "application/zip",
-      "content-length": contentLength(assetPath),
-    };
+    const { data: release } = await github.rest.repos.getReleaseByTag({
+      ...options,
+      tag: process.env.TAG_NAME || `v${version}`,
+    });
 
-    const ext = path.extname(assetPath);
-    const filename = path.basename(assetPath).replace(ext, "");
-    const assetName = path.dirname(assetPath).includes(`target${path.sep}debug`)
-      ? `${filename}-debug${ext}`
-      : `${filename}${ext}`;
+    console.log(release.name);
 
-    console.log(`[INFO]: Uploading ${assetName}...`);
-
-    try {
-      await github.rest.repos.uploadReleaseAsset({
-        headers,
-        name: assetName,
-        data: fs.readFileSync(assetPath),
-        owner: context.repo.owner,
-        repo: context.repo.repo,
-        release_id: releaseId,
-      });
-    } catch (error) {
-      console.log(error.message);
-    }
+    await github.rest.repos.uploadReleaseAsset({
+      ...options,
+      release_id: release.id,
+      name: assetPath,
+      data: zip.toBuffer(),
+    });
   }
 }
 
-if (process.platform === "darwin" && process.arch === "arm64") {
-  resolve();
-} else {
-  console.error("invalid");
-  exit(1);
-}
+resolve();
